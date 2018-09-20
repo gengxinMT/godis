@@ -1,3 +1,2 @@
-Implement a simple redis service using go
-test
-f
+#godis设计文档
+
