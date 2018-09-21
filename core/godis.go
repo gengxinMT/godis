@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 type dict map[string]*GodisObject
@@ -66,7 +67,10 @@ func (c *Client) ReadQueryFromClient(conn net.Conn) (err error) {
 	// 拼接一个\n来组成一个完整的命令，在处理命令时根据\n即可判断
 
 	str := string(ibuf)
+	///log.Printf(str) //+++++++++++
+
 	part := strings.Split(str, "\n") //将输出的内容根据\n切分成一个个片
+
 	//在这里对协议进行实现
 	c.QueryBuf = CmdProtocol(part[0]) //++++++++++++++++++++++++++++++++++
 	//	c.QueryBuf = part[0]//获取最开始的以\n区分的一条命令-----------------
@@ -75,9 +79,11 @@ func (c *Client) ReadQueryFromClient(conn net.Conn) (err error) {
 
 func CmdProtocol(cmd string) (pro string) { //+++++++++++++++++++++++
 	//set key value
-	rep := strings.Split(cmd, " ") //返回一个字符串数组
+	//rep := strings.Split(cmd, " ") //返回一个字符串数组
+	rep := strings.FieldsFunc(cmd, unicode.IsSpace)
 	//*3\r\n$3\r\nset\r\n$3\r\nkey\r\n$5\r\nvalue\r\n
 	for k, v := range rep {
+		//	v = strings.FieldsFunc(v, unicode.IsSpace)
 		if k == 0 {
 			//计算长度
 			len := len(rep)
@@ -95,6 +101,11 @@ func ProtocolToCmd(pro string) (argv []string, argc int) { //+++++++++++++++++++
 		return nil, 0
 	}
 	argc, err := strconv.Atoi(parts[0][1:])
+	//	log.Print(argc)
+	//	str := `abc def ghij    klmn
+	//  123
+	// 456`
+	//	log.Printf("Fields are: %q", strings.FieldsFunc(str, unicode.IsSpace))
 	if err != nil {
 		return nil, 0
 	}
