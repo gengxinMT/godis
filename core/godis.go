@@ -1,13 +1,13 @@
 package core
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"godis/core/proto"
 	"log"
 	"net"
 	"os"
-	"strconv"
-	"strings"
-	"unicode"
 )
 
 type dict map[string]*GodisObject
@@ -58,25 +58,154 @@ func (s *Server) CreateClient(conn net.Conn) (c *Client) {
 
 //客户端的请求都放在服务器创建的客户端中进行  服务端不需要感知具体是如何操作的  这些都有client来完成
 func (c *Client) ReadQueryFromClient(conn net.Conn) (err error) {
-	ibuf := make([]byte, 1024)
+	ibuf := make([]byte, 512)
 	_, err = conn.Read(ibuf)
 	if err != nil {
+		//	log.Println("conn.Read err!=nil", err, "---len---", n, conn)
+		//	conn.Close()
 		return err
 	}
+
 	//  log.Println("read读取客户端数据")
 	// 拼接一个\n来组成一个完整的命令，在处理命令时根据\n即可判断
-
-	str := string(ibuf)
+	//str := string(ibuf)
 	///log.Printf(str) //+++++++++++
-
-	part := strings.Split(str, "\n") //将输出的内容根据\n切分成一个个片
-
+	//part := strings.Split(str, "\n") //将输出的内容根据\n切分成一个个片
+	//	part := strings.Replace(str, "\n", "", -1)
 	//在这里对协议进行实现
-	c.QueryBuf = CmdProtocol(part[0]) //++++++++++++++++++++++++++++++++++
+	//	c.QueryBuf = CmdProtocol(part[0]) //++++++++++++++++++++++++++++++++++
+	c.QueryBuf = string(ibuf)
+	//log.Println(c.QueryBuf)
+	//*3\r\n$3\r\nset\r\n$1\r\na\r\n$1\r\n1\r\n
 	//	c.QueryBuf = part[0]//获取最开始的以\n区分的一条命令-----------------
 	return nil
 }
 
+//ProcessInputBuffer 处理客户端请求信息
+func (c *Client) ProcessInputBuffer() error {
+	//首先处理命令参数
+	//MustCompile类似于编译，但如果无法解析表达式，就会引发恐慌。它简化了保存已编译正则表达式的全局变量的安全初始化。
+	//r := regexp.MustCompile("[^\\s]+")-------------------------------
+	//Trim返回字符串s的一部分，删除了cutset中包含的所有前导和后导Unicode代码点。
+	//FindString返回一个字符串，其中包含正则表达式s中最左边匹配项的文本。如果没有匹配，则返回值为空字符串，但如果正则表达式成功匹配空字符串，则返回值为空。如果需要区分这些情况，可以使用FindStringIndex或FindStringSubmatch。
+	//FindAllString是FindString的“All”版本;它返回表达式的所有连续匹配部分，如包注释中的“all”描述所定义的那样。返回值为nil表示不匹配。
+	//parts := r.FindAllString(strings.Trim(c.QueryBuf, " "), -1) //在这里的限制是每一个命令及参数之间严格按照set key value 的格式进行查找，参数分别代表将每一个参数进行返回处理 -----------------------
+	//得到argc以及argv
+
+	//argc, argv := len(parts), parts-----------------------------------
+	//argv, argc := ProtocolToCmd(c.QueryBuf) //++++++++++++++++++
+	decoder := proto.NewDecode(bytes.NewReader([]byte(c.QueryBuf)))
+	if resp, err := decoder.DecodeMultiBulk(); err == nil {
+		c.Argc = len(resp)
+		c.Argv = make([]*GodisObject, c.Argc)
+		for k, s := range resp {
+			c.Argv[k] = CreatObject(ObjectTypeString, string(s.Value))
+			//	log.Println(string(s.Value))
+		}
+		return nil
+	}
+
+	//	c.Argc = argc
+	//为每一个参数确定对应OBJECT类型的对象
+	//	j := 0
+	//	for _, val := range argv {
+	//		c.Argv[j] = CreatObject(ObjectTypeString, val)
+	//		j++
+	//	}
+	return errors.New("processInputBuffer failed")
+}
+
+func (s *Server) ProcessClientRequests(c *Client) {
+	//在这里首先得到具体的命令
+	v := c.Argv[0].Ptr
+	name, ok := v.(string)
+	//log.Println(name)
+	if !ok {
+		log.Println("error cmd")
+		os.Exit(1)
+	}
+	//然后查询commond表是否有命令
+	cmd := lookCommond(name, s)
+	if cmd != nil {
+		c.Cmd = cmd
+		//如果有则执行对应操作
+		call(c, s)
+	} else {
+		addReplyStatus(c, fmt.Sprintf("(error) ERR unknown command '%s'", name))
+	}
+}
+
+func lookCommond(name string, s *Server) (cmd *GodisCommond) {
+	if cmd, ok := s.Commond[name]; ok {
+		return cmd
+	}
+	return nil
+
+}
+func call(c *Client, s *Server) {
+	//	 if c.Cmd=="get"{
+	//调用get处理命令
+	//	 }else if c.Cmd=="set"{
+	//调用set处理命令
+	//	}
+
+	//在这里体现出了接口的好处，只要实现借口就可以实现对应的函数
+	c.Cmd.Proc(c, s)
+	//log.Println("call success")
+}
+
+func SetCommond(c *Client, s *Server) {
+	//获取出参数
+	objkey := c.Argv[1]
+	objval := c.Argv[2]
+	if c.Argc != 3 {
+		addReplyError(c, "(error) ERR wrong number of arguments for 'set' command")
+		return
+	}
+	if stringkey, ok1 := objkey.Ptr.(string); ok1 {
+		if stringvalue, ok2 := objval.Ptr.(string); ok2 {
+			c.Db.Dict[stringkey] = CreatObject(ObjectTypeString, stringvalue)
+			//将key-value插入到对应的Db的对应的位置
+		}
+	}
+	//log.Println("ok")
+	addReplyStatus(c, "OK")
+}
+
+func addReplyStatus(c *Client, s string) {
+	r := proto.NewString([]byte(s))
+	addReplyString(c, r)
+}
+func addReplyError(c *Client, s string) {
+	r := proto.NewError([]byte(s))
+	addReplyString(c, r)
+}
+
+//服务端处理完命令时将返回的结果进行编码
+func addReplyString(c *Client, r *proto.Resp) {
+	if ret, err := proto.EncodeToBytes(r); err == nil {
+		c.Buf = string(ret)
+		//+OK\r\n
+		//log.Println(c.Buf)
+	}
+}
+func GetCommond(c *Client, s *Server) {
+	godiscmd := lookUpKey(c.Db, c.Argv[1])
+	if godiscmd != nil {
+		addReplyStatus(c, godiscmd.Ptr.(string))
+	} else {
+		addReplyStatus(c, "nil")
+	}
+}
+
+func lookUpKey(db *GodisDB, key *GodisObject) (ret *GodisObject) {
+	if ret, ok := db.Dict[key.Ptr.(string)]; ok {
+		return ret
+	}
+	return nil
+}
+
+/*
 func CmdProtocol(cmd string) (pro string) { //+++++++++++++++++++++++
 	//set key value
 	//rep := strings.Split(cmd, " ") //返回一个字符串数组
@@ -132,98 +261,4 @@ func ProtocolToCmd(pro string) (argv []string, argc int) { //+++++++++++++++++++
 	return argv, argc
 
 }
-
-//ProcessInputBuffer 处理客户端请求信息
-func (c *Client) ProcessInputBuffer() {
-	//首先处理命令参数
-	//MustCompile类似于编译，但如果无法解析表达式，就会引发恐慌。它简化了保存已编译正则表达式的全局变量的安全初始化。
-	//r := regexp.MustCompile("[^\\s]+")-------------------------------
-	//Trim返回字符串s的一部分，删除了cutset中包含的所有前导和后导Unicode代码点。
-	//FindString返回一个字符串，其中包含正则表达式s中最左边匹配项的文本。如果没有匹配，则返回值为空字符串，但如果正则表达式成功匹配空字符串，则返回值为空。如果需要区分这些情况，可以使用FindStringIndex或FindStringSubmatch。
-	//FindAllString是FindString的“All”版本;它返回表达式的所有连续匹配部分，如包注释中的“all”描述所定义的那样。返回值为nil表示不匹配。
-	//parts := r.FindAllString(strings.Trim(c.QueryBuf, " "), -1) //在这里的限制是每一个命令及参数之间严格按照set key value 的格式进行查找，参数分别代表将每一个参数进行返回处理 -----------------------
-	//得到argc以及argv
-	//argc, argv := len(parts), parts-----------------------------------
-	argv, argc := ProtocolToCmd(c.QueryBuf) //++++++++++++++++++
-	c.Argc = argc
-	//为每一个参数确定对应OBJECT类型的对象
-	j := 0
-	for _, val := range argv {
-		c.Argv[j] = CreatObject(ObjectTypeString, val)
-		j++
-	}
-}
-func (s *Server) ProcessClientRequests(c *Client) {
-	//在这里首先得到具体的命令
-	v := c.Argv[0].Ptr
-	name, ok := v.(string)
-	if !ok {
-		log.Println("error cmd")
-		os.Exit(1)
-	}
-	//然后查询commond表是否有命令
-	cmd := lookCommond(name, s)
-	if cmd != nil {
-		c.Cmd = cmd
-		//如果有则执行对应操作
-		call(c, s)
-	} else {
-		addReply(c, CreatObject(ObjectTypeString, fmt.Sprintf("(error) ERR unknown command '%s'", name)))
-	}
-}
-
-func lookCommond(name string, s *Server) (cmd *GodisCommond) {
-	if cmd, ok := s.Commond[name]; ok {
-		return cmd
-	}
-	return nil
-
-}
-func call(c *Client, s *Server) {
-	//	 if c.Cmd=="get"{
-	//调用get处理命令
-	//	 }else if c.Cmd=="set"{
-	//调用set处理命令
-	//	}
-
-	//在这里体现出了接口的好处，只要实现借口就可以实现对应的函数
-	c.Cmd.Proc(c, s)
-}
-
-func SetCommond(c *Client, s *Server) {
-	//获取出参数
-	objkey := c.Argv[1]
-	objval := c.Argv[2]
-	if c.Argc != 3 {
-		addReply(c, CreatObject(ObjectTypeString, "(error) ERR wrong number of arguments for 'set' command"))
-		return
-	}
-	if stringkey, ok1 := objkey.Ptr.(string); ok1 {
-		if stringvalue, ok2 := objval.Ptr.(string); ok2 {
-			c.Db.Dict[stringkey] = CreatObject(ObjectTypeString, stringvalue)
-			//将key-value插入到对应的Db的对应的位置
-		}
-	}
-	addReply(c, CreatObject(ObjectTypeString, "OK"))
-}
-
-func addReply(c *Client, object *GodisObject) {
-	c.Buf = object.Ptr.(string)
-}
-
-func GetCommond(c *Client, s *Server) {
-	godiscmd := lookUpKey(c.Db, c.Argv[1])
-	if godiscmd != nil {
-		addReply(c, godiscmd)
-	} else {
-		addReply(c, CreatObject(ObjectTypeString, "nil"))
-	}
-}
-
-func lookUpKey(db *GodisDB, key *GodisObject) (ret *GodisObject) {
-	if ret, ok := db.Dict[key.Ptr.(string)]; ok {
-		return ret
-	}
-	return nil
-
-}
+*/

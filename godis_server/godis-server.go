@@ -119,7 +119,7 @@ func sayhello(conn net.Conn) {
 
 }
 
-//将客户端的响应返回给客户端是服务器的功能  所以这个函数要放在这里
+//将响应返回给客户端是服务器的功能  所以这个函数要放在这里
 func writeResponseToClient(conn net.Conn, c *core.Client) {
 	conn.Write([]byte(c.Buf))
 }
