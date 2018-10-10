@@ -34,7 +34,7 @@ type Server struct {
 	ClientNum        int32                    //链接的客户端计数
 	Pid              int                      //PID进程ID·
 	Commond          map[string]*GodisCommond //一个具体的命令对应着一个命令处理函数
-	Dirty            bool                     //Dirty数据是否被污染
+	Dirty            int64                    //判断持久化时机
 	AofBuf           []string                 //存储
 }
 
@@ -46,9 +46,10 @@ type Client struct {
 	Db       *GodisDB       //每一个client指向的DB
 	QueryBuf string         //请求的buf
 	Buf      string         //响应buf,返回给客户端的信息
+	Flag     bool           //持久化标识位
 }
 
-func (s *Server) CreateClient(conn net.Conn) (c *Client) {
+func (s *Server) CreateClient() (c *Client) {
 	c = new(Client)
 	c.Argv = make([]*GodisObject, 5) //在这里创建5个是因为redis只有五种数据结构  我们这里只会使用一种
 	c.Db = s.Db[0]                   //client.Db指向的是正在连接的db。如果有select切换操作，该指向也会随之变化。
@@ -96,6 +97,8 @@ func (c *Client) ProcessInputBuffer() error {
 	//argv, argc := ProtocolToCmd(c.QueryBuf) //++++++++++++++++++
 	decoder := proto.NewDecode(bytes.NewReader([]byte(c.QueryBuf)))
 	if resp, err := decoder.DecodeMultiBulk(); err == nil {
+		//	log.Println("DecodeMultiBulk success")
+		//代表解码成功，说明在备份文件中存在命令记录
 		c.Argc = len(resp)
 		c.Argv = make([]*GodisObject, c.Argc)
 		for k, s := range resp {
@@ -114,9 +117,10 @@ func (c *Client) ProcessInputBuffer() error {
 	//	}
 	return errors.New("processInputBuffer failed")
 }
-
 func (s *Server) ProcessClientRequests(c *Client) {
 	//在这里首先得到具体的命令
+
+	//++++++++++++++++++++++++++++++++===
 	v := c.Argv[0].Ptr
 	name, ok := v.(string)
 	//log.Println(name)
@@ -148,12 +152,17 @@ func call(c *Client, s *Server) {
 	//	 }else if c.Cmd=="set"{
 	//调用set处理命令
 	//	}
-
+	dirty := s.Dirty
 	//在这里体现出了接口的好处，只要实现借口就可以实现对应的函数
 	c.Cmd.Proc(c, s)
+	dirty = s.Dirty - dirty
+	if dirty > 0 && !c.Flag {
+		//执行AOF持久化操作
+		//log.Println("AppendToFile+++++++")
+		AppendToFile(s.Aoffilename, c.QueryBuf)
+	}
 	//log.Println("call success")
 }
-
 func SetCommond(c *Client, s *Server) {
 	//获取出参数
 	objkey := c.Argv[1]
@@ -165,6 +174,7 @@ func SetCommond(c *Client, s *Server) {
 	if stringkey, ok1 := objkey.Ptr.(string); ok1 {
 		if stringvalue, ok2 := objval.Ptr.(string); ok2 {
 			c.Db.Dict[stringkey] = CreatObject(ObjectTypeString, stringvalue)
+			s.Dirty++
 			//将key-value插入到对应的Db的对应的位置
 		}
 	}

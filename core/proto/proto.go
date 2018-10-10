@@ -388,7 +388,7 @@ func (dec *Decoder) DecodeMultiBulk() ([]*Resp, error) {
 	rep, err := dec.decodeMultiBulk()
 	if err != nil {
 		dec.Err = err
-
+		log.Println("1111111")
 	}
 	return rep, dec.Err
 }
@@ -397,6 +397,7 @@ func (dec *Decoder) DecodeMultiBulk() ([]*Resp, error) {
 func (d *Decoder) decodeMultiBulk() ([]*Resp, error) {
 	b, err := d.br.PeekByte()
 	if err != nil {
+		log.Println("2")
 		return nil, ErrorTrace(err)
 	}
 	if byte(b) != TypeMultiReply {
@@ -404,11 +405,13 @@ func (d *Decoder) decodeMultiBulk() ([]*Resp, error) {
 	}
 
 	if _, err := d.br.ReadByte(); err != nil {
+		log.Println("22")
 		return nil, ErrorTrace(err)
 	}
 	n, err := d.decodeInt()
 
 	if err != nil {
+		log.Println("222")
 		return nil, ErrorTrace(err)
 	}
 	switch {
@@ -421,9 +424,11 @@ func (d *Decoder) decodeMultiBulk() ([]*Resp, error) {
 	for i := range multi {
 		r, err := d.decodeResp()
 		if err != nil {
+			log.Println("2222")
 			return nil, err
 		}
 		if r.Type != TypeBulkReply {
+			log.Println("22222")
 			return nil, ErrorTrace(ErrBadMultiBulkContent)
 		}
 		multi[i] = r
@@ -435,6 +440,7 @@ func (d *Decoder) decodeMultiBulk() ([]*Resp, error) {
 func (d *Decoder) decodeSingleLineMultiBulk() ([]*Resp, error) {
 	b, err := d.decodeTextBytes()
 	if err != nil {
+		log.Println("3333")
 		return nil, err
 	}
 	multi := make([]*Resp, 0, 8)
@@ -447,6 +453,7 @@ func (d *Decoder) decodeSingleLineMultiBulk() ([]*Resp, error) {
 		}
 	}
 	if len(multi) == 0 {
+		log.Println("33333")
 		return nil, ErrorTrace(err)
 	}
 	return multi, nil

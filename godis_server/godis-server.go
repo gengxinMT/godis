@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"godis/core"
 	"log"
@@ -9,10 +8,16 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	"flag"
 	"time"
 )
 
 var godis = new(core.Server)
+
+const (
+	DefaultAofFile = "./godis.aof"
+)
 
 const maxRead = 255
 
@@ -56,6 +61,8 @@ func initServer(hostandPort string) *net.TCPListener {
 
 	godis.Pid = os.Getpid()
 	godis.DbNum = 16
+	godis.Dirty = 0
+	godis.Aoffilename = DefaultAofFile
 	initDb()
 	godis.Start = time.Now().UnixNano() / 1000000 //以毫秒为单位获取当前时间戳
 
@@ -68,6 +75,7 @@ func initServer(hostandPort string) *net.TCPListener {
 		"set": setCommond, //在这里只需要小写就可以
 	}
 
+	LoadData()
 	return listener
 }
 func initDb() {
@@ -79,9 +87,26 @@ func initDb() {
 		//godis.Db[i].Dict = make(map[list]*core.GodisObject,100)
 	}
 }
+func LoadData() {
+	c := godis.CreateClient()
+	c.Flag = true
+	pros := core.ReadAof(godis.Aoffilename)
+	for _, v := range pros {
+		c.QueryBuf = string(v)
+		if len(c.QueryBuf) != 0 {
+			err := c.ProcessInputBuffer()
+			if err != nil {
+				//ilog.Println("ProcessInputBuffer failed", err)
+				return
+			}
+			godis.ProcessClientRequests(c)
+		}
+
+	}
+}
 func connectionHandler(conn net.Conn) {
 	//在这里创建一个client结构  用来保存记录链接等信息
-	c := godis.CreateClient(conn)
+	c := godis.CreateClient()
 	connfrom := conn.RemoteAddr().String()
 	println("Connection from:", connfrom)
 	sayhello(conn)
